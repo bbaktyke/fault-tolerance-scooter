@@ -212,6 +212,19 @@ func (a *App) initHealthCheck(_ context.Context) error {
 		return fmt.Errorf("Приложение ещё не запущено")
 	})
 
+	// Трафик принимаем только после загрузки справочника тарифов.
+	// Ошибка загрузки оставляет pod неготовым навсегда (без перезапусков:
+	// liveness это не затрагивает).
+	a.healthCheck.AddReadinessCheck("tariffs", func() error {
+		if atomic.LoadInt32(&a.tariffsLoaded) != 0 {
+			return nil
+		}
+		if msg, ok := a.tariffsLoadErr.Load().(string); ok {
+			return fmt.Errorf("Ошибка загрузки тарифов: %s", msg)
+		}
+		return fmt.Errorf("Тарифы ещё загружаются")
+	})
+
 	a.healthCheck.AddReadinessCheck("termination", func() error {
 		if atomic.LoadInt32(&a.terminated) == 0 {
 			return nil

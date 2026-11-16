@@ -53,6 +53,11 @@ type App struct {
 	started    int32
 	terminated int32
 
+	// tariffsLoaded = 1 только после успешной загрузки непустого справочника.
+	tariffsLoaded int32
+	// tariffsLoadErr хранит текст последней ошибки загрузки (string).
+	tariffsLoadErr atomic.Value
+
 	// обработчик health check probe
 	healthCheck healthcheck.Handler
 
@@ -81,14 +86,23 @@ func New(ctx context.Context) *App {
 	if err := app.init(ctx); err != nil {
 		log.Fatalf("[APP] Не удалось инициализировать приложение: %s", err.Error())
 	}
-	// Файл загружается в фоне: сервер стартует раньше готовности справочника.
+	// Файл загружается в фоне: сервер стартует раньше готовности справочника,
+	// поэтому readiness ждёт результата загрузки (см. проверку "tariffs").
 	go func() {
 		if err := app.storage.Tariffs.LoadTariffs(ctx, config.Instance().TariffsFile); err != nil {
+			app.tariffsLoadErr.Store(err.Error())
 			slog.Error("Не удалось загрузить тарифы", "error", err)
 			return
 		}
+		if !app.storage.Tariffs.IsLoaded() {
+			app.tariffsLoadErr.Store("справочник тарифов пуст")
+			slog.Error("Не удалось загрузить тарифы", "error", "справочник тарифов пуст")
+			return
+		}
+		atomic.StoreInt32(&app.tariffsLoaded, 1)
 		slog.Info("Тарифы загружены")
 	}()
+
 	return app
 }
 
